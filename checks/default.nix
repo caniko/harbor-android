@@ -6,9 +6,13 @@
   templateFlake = builtins.readFile ../templates/default/flake.nix;
   fakeSdk = pkgs.runCommand "fake-androidsdk" {} ''
     mkdir -p $out/libexec/android-sdk/ndk/29.0.14206865
+    mkdir -p $out/libexec/android-sdk/build-tools/34.0.0
     mkdir -p $out/libexec/android-sdk/platform-tools
     mkdir -p $out/libexec/android-sdk/emulator
+    printf '#!/bin/sh\nexit 0\n' > $out/libexec/android-sdk/build-tools/34.0.0/aapt2
+    chmod +x $out/libexec/android-sdk/build-tools/34.0.0/aapt2
   '';
+  fakeAapt2 = "${fakeSdk}/libexec/android-sdk/build-tools/34.0.0/aapt2";
   fakeToolchain = pkgs.symlinkJoin {
     name = "fake-rust";
     paths = [pkgs.coreutils];
@@ -181,6 +185,7 @@ in
       assert !(pkgs.lib.hasInfix "--offline" drv.drvAttrs.buildPhase);
       assert pkgs.lib.hasInfix "GRADLE_USER_HOME" drv.drvAttrs.preBuild;
       assert pkgs.lib.hasInfix "CARGO_HOME" drv.drvAttrs.preBuild;
+      assert pkgs.lib.hasInfix "ANDROID_USER_HOME" drv.drvAttrs.preBuild;
         pkgs.runCommand "check-mkAndroidApk-shape" {} "touch $out";
 
     mkAndroidApk-hermetic = let
@@ -204,6 +209,7 @@ in
         mode = "release";
         mavenCacheTar = fakeCacheTar;
         cargoVendorDir = fakeVendor;
+        aapt2 = fakeAapt2;
         buildCommand = "nix build .#android-test-peer-apk";
       };
     in
@@ -237,6 +243,10 @@ in
       '';
       fakeCargo = pkgs.writeShellScriptBin "cargo" ''
         set -euo pipefail
+        if [ "''${1:-}" = --version ]; then
+          echo "cargo 1.95.0-fixture"
+          exit 0
+        fi
         test "$1" = ndk
         test "$CARGO_NET_OFFLINE" = true
         test "$CARGO_NDK_PLATFORM" = 28
@@ -262,13 +272,20 @@ in
         test "$3" = --offline
         test -d "$GRADLE_USER_HOME/caches/modules-2/files-2.1"
         mkdir -p app/build/outputs/apk/debug
-        touch app/build/outputs/apk/debug/app-debug.apk
+        printf 'fixture apk' > app/build/outputs/apk/debug/app-debug.apk
       '';
-    in
-      lib.mkAndroidApk {
+      fakeRustc = pkgs.writeShellScriptBin "rustc" ''
+        test "$1" = --version
+        echo "rustc 1.95.0-fixture"
+      '';
+      fakeRuntimeToolchain = pkgs.symlinkJoin {
+        name = "fake-runtime-rust";
+        paths = [fakeCargo fakeRustc];
+      };
+      package = lib.mkAndroidApk {
         inherit pkgs;
         androidSdk = fakeSdk;
-        rustToolchain = fakeCargo;
+        rustToolchain = fakeRuntimeToolchain;
         cargoNdk = pkgs.emptyDirectory;
         jdk = pkgs.emptyDirectory;
         gradle = fakeGradle;
@@ -280,7 +297,37 @@ in
         jniLibsDir = "android/app/src/main/jniLibs";
         apkOutPath = "android/app/build/outputs/apk/debug/app-debug.apk";
         cargoNdkPlatform = 28;
+        aapt2 = fakeAapt2;
+        sourceIdentity = {
+          commit = "0123456789abcdef";
+          workspaceDigest = "sha256-fixture";
+          dirty = false;
+        };
+        cargoLock = ../tests/fixtures/android-workspace/Cargo.lock;
+        flakeLock = ../tests/fixtures/android-workspace/flake.lock;
       };
+    in
+      package.overrideAttrs (old: {
+        postFixup =
+          (old.postFixup or "")
+          + ''
+            unsigned="$out/unsigned-manifest.json"
+            distribution="$out/distribution-manifest.json"
+            test -f "$unsigned"
+            test -f "$distribution"
+            apk_digest="$(${pkgs.coreutils}/bin/sha256sum "$out/app-debug.apk")"
+            apk_digest="''${apk_digest%% *}"
+            test "$(${pkgs.jq}/bin/jq -r '.entries[0].digest' "$unsigned")" = "$apk_digest"
+            test "$(${pkgs.jq}/bin/jq -r '.entries[0].role' "$unsigned")" = Package
+            unsigned_digest="$(${pkgs.jq}/bin/jq -r '.digest' "$unsigned")"
+            calculated="$(${pkgs.jq}/bin/jq 'del(.digest)' -cSj "$unsigned" | ${pkgs.coreutils}/bin/sha256sum)"
+            calculated="''${calculated%% *}"
+            test "$unsigned_digest" = "$calculated"
+            test "$(${pkgs.jq}/bin/jq -r '.unsigned_digest' "$distribution")" = "$unsigned_digest"
+            test "$(${pkgs.jq}/bin/jq -r '.package_digest' "$distribution")" = "$apk_digest"
+            test "$(${pkgs.jq}/bin/jq -r '.signed' "$distribution")" = false
+          '';
+      });
 
     mkAndroidApk-rejects-bad-mode = let
       result = builtins.tryEval (lib.mkAndroidApk {
@@ -344,6 +391,47 @@ in
     in
       assert !result.success;
         pkgs.runCommand "check-mkAndroidApk-rejects-unimplemented-gradle-deps" {} "touch $out";
+
+    mkAndroidApk-rejects-incomplete-source-identity = let
+      result = builtins.tryEval (lib.mkAndroidApk {
+        inherit pkgs;
+        androidSdk = fakeSdk;
+        rustToolchain = fakeToolchain;
+        workspaceSrc = ./.;
+        cargoPkg = "x";
+        gradleModule = ":x";
+        jniLibsDir = "x";
+        apkOutPath = "x";
+        sourceIdentity = {commit = "abc";};
+      });
+    in
+      assert !result.success;
+        pkgs.runCommand "check-mkAndroidApk-rejects-incomplete-source-identity" {} "touch $out";
+
+    mkAndroidApk-rejects-hermetic-build-without-aapt2 = let
+      fakeCacheTar = pkgs.runCommand "fake-cache-without-aapt2.tar" {} ''
+        mkdir -p $out
+        touch $out/dummy
+      '';
+      fakeVendor = pkgs.runCommand "fake-vendor-without-aapt2" {} ''
+        mkdir -p $out
+        touch $out/config.toml
+      '';
+      result = builtins.tryEval (lib.mkAndroidApk {
+        inherit pkgs;
+        androidSdk = fakeSdk;
+        rustToolchain = fakeToolchain;
+        workspaceSrc = ./.;
+        cargoPkg = "x";
+        gradleModule = ":x";
+        jniLibsDir = "x";
+        apkOutPath = "x";
+        mavenCacheTar = fakeCacheTar;
+        cargoVendorDir = fakeVendor;
+      });
+    in
+      assert !result.success;
+        pkgs.runCommand "check-mkAndroidApk-rejects-hermetic-build-without-aapt2" {} "touch $out";
 
     mkAndroidApkDevBuilder-shape = let
       script = lib.mkAndroidApkDevBuilder {

@@ -5,6 +5,7 @@
 #   cargoNdkPlatform?, cargoVendorDir?, buildCommand?,
 #   cargoFeatures?, cargoNoDefaultFeatures?,
 #   mavenCacheTar?, gradleDeps?,
+#   sourceIdentity?, cargoLock?, flakeLock?, aapt2?,
 #   cargoNdk?, jdk?, gradle?, perl?, lib?,
 # } -> derivation
 #
@@ -84,12 +85,26 @@
   # Reserved for gradle2nix once its manifest materialization is implemented.
   # Reject non-null values instead of silently claiming hermetic support.
   gradleDeps ? null,
+  sourceIdentity ? null,
+  cargoLock ? null,
+  flakeLock ? null,
+  aapt2 ? null,
 }: let
   validRelativePath = value:
     builtins.isString value
     && value != ""
     && !(lib.hasPrefix "/" value)
     && !(builtins.elem ".." (lib.splitString "/" value));
+  validSourceIdentity = value:
+    builtins.isAttrs value
+    && value ? commit
+    && builtins.isString value.commit
+    && value.commit != ""
+    && value ? workspaceDigest
+    && builtins.isString value.workspaceDigest
+    && value.workspaceDigest != ""
+    && value ? dirty
+    && builtins.isBool value.dirty;
 in
   assert lib.assertMsg (builtins.isString cargoPkg && cargoPkg != "")
   "harbor-android: mkAndroidApk requires a non-empty `cargoPkg` workspace cdylib package name";
@@ -118,7 +133,15 @@ in
   assert lib.assertMsg (gradleDeps == null)
   "harbor-android: mkAndroidApk `gradleDeps` is not implemented; use `mavenCacheTar` plus `cargoVendorDir`";
   assert lib.assertMsg (mavenCacheTar == null || cargoVendorDir != null)
-  "harbor-android: mkAndroidApk `mavenCacheTar` also requires `cargoVendorDir` from `craneLib.vendorCargoDeps`; Maven-only caching is not hermetic"; let
+  "harbor-android: mkAndroidApk `mavenCacheTar` also requires `cargoVendorDir` from `craneLib.vendorCargoDeps`; Maven-only caching is not hermetic";
+  assert lib.assertMsg (sourceIdentity == null || validSourceIdentity sourceIdentity)
+  "harbor-android: mkAndroidApk `sourceIdentity` requires non-empty commit/workspaceDigest strings and a dirty boolean";
+  assert lib.assertMsg (sourceIdentity == null || (cargoLock != null && flakeLock != null))
+  "harbor-android: mkAndroidApk `sourceIdentity` requires cargoLock and flakeLock";
+  assert lib.assertMsg (aapt2 == null || builtins.isPath aapt2 || builtins.isString aapt2)
+  "harbor-android: mkAndroidApk `aapt2` must be null, a path, or a string";
+  assert lib.assertMsg (mavenCacheTar == null || aapt2 != null)
+  "harbor-android: hermetic Gradle builds require the SDK aapt2 executable"; let
     modeCap =
       if mode == "debug"
       then "Debug"
@@ -128,6 +151,25 @@ in
     cargoHermetic = cargoVendorDir != null;
     gradleHermetic = mavenCacheTar != null;
     hermetic = cargoHermetic && gradleHermetic;
+    targetByAbi = {
+      "arm64-v8a" = {
+        rustTarget = "aarch64-linux-android";
+        arch = "aarch64";
+      };
+      "armeabi-v7a" = {
+        rustTarget = "armv7-linux-androideabi";
+        arch = "armv7";
+      };
+      x86 = {
+        rustTarget = "i686-linux-android";
+        arch = "x86";
+      };
+      x86_64 = {
+        rustTarget = "x86_64-linux-android";
+        arch = "x86_64";
+      };
+    };
+    target = targetByAbi.${abi} or (throw "harbor-android: unsupported Android ABI `${abi}`");
 
     cargoArgs =
       ["ndk" "-t" abi "-o" jniLibsDir "build"]
@@ -166,7 +208,16 @@ in
           export CARGO_HOME="$NIX_BUILD_TOP/cargo-home"
           export CARGO_TARGET_DIR="$NIX_BUILD_TOP/cargo-target"
           export GRADLE_USER_HOME="$NIX_BUILD_TOP/.gradle-home"
-          mkdir -p "$HOME" "$CARGO_HOME" "$CARGO_TARGET_DIR" "$GRADLE_USER_HOME"
+          export ANDROID_USER_HOME="$HOME/.android"
+          mkdir -p "$HOME" "$CARGO_HOME" "$CARGO_TARGET_DIR" "$GRADLE_USER_HOME" "$ANDROID_USER_HOME"
+
+          ${lib.optionalString (aapt2 != null) ''
+            if [ ! -x ${lib.escapeShellArg (toString aapt2)} ]; then
+              echo "error: aapt2 is not executable: ${toString aapt2}" >&2
+              exit 1
+            fi
+            export GRADLE_OPTS="''${GRADLE_OPTS:-} -Dorg.gradle.project.android.aapt2FromMavenOverride=${toString aapt2}"
+          ''}
 
           ${lib.optionalString cargoHermetic ''
             if [ ! -f ${lib.escapeShellArg "${cargoVendorDir}/config.toml"} ]; then
@@ -209,6 +260,11 @@ in
             exit 1
           fi
           cp ${lib.escapeShellArg apkOutPath} "$out/"
+
+          ${lib.optionalString (sourceIdentity != null) (import ./android-package-identity.nix {
+            inherit pkgs lib sourceIdentity cargoLock flakeLock rustToolchain androidSdk mode cargoFeatures hermetic;
+            inherit (target) rustTarget arch;
+          })}
 
           runHook postInstall
         '';

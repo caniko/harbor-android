@@ -32,6 +32,10 @@
   cargoVendorDir ? null,
   mavenCacheTar ? null,
   gradleDeps ? null,
+  sourceIdentity ? null,
+  cargoLock ? null,
+  flakeLock ? null,
+  aapt2 ? null,
   ndkVersion ? "29.0.14206865",
   cargoNdkPlatform ? null,
   commonCargoFeatures ? [],
@@ -116,6 +120,7 @@ assert lib.assertMsg (mavenCacheTar == null || cargoVendorDir != null)
               inherit attr;
               value = mkAndroidApk {
                 inherit pkgs androidSdk rustToolchain workspaceSrc cargoVendorDir mavenCacheTar gradleDeps ndkVersion androidDir;
+                inherit sourceIdentity cargoLock flakeLock aapt2;
                 inherit (cfg) cargoPkg gradleModule jniLibsDir cargoFeatures cargoNoDefaultFeatures cargoNdkPlatform;
                 inherit mode;
                 pname = callOrValue cfg.pname mode;
@@ -142,6 +147,7 @@ assert lib.assertMsg (mavenCacheTar == null || cargoVendorDir != null)
         attr = cfg.devAppAttr;
         value = mkAndroidApkDevBuilder {
           inherit pkgs defaultAbi defaultMode androidDir;
+          inherit aapt2;
           defaultFlavor = name;
           flavors = devBuilderFlavors;
           packageName = cfg.devAppAttr;

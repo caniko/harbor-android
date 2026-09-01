@@ -28,6 +28,7 @@
   cargoNoDefaultFeatures ? false,
   cargoNdkPlatform ? null,
   buildCommand ? null,
+  aapt2 ? null,
   lib ? pkgs.lib,
 }: let
   validRelativePath = value:
@@ -62,7 +63,9 @@ in
   assert lib.assertMsg (validPlatform cargoNdkPlatform)
   "harbor-android: mkAndroidApkDevBuilder `cargoNdkPlatform` must be null or a positive Android API level";
   assert lib.assertMsg (buildCommand == null || (builtins.isString buildCommand && buildCommand != ""))
-  "harbor-android: mkAndroidApkDevBuilder `buildCommand` must be null or a non-empty string"; let
+  "harbor-android: mkAndroidApkDevBuilder `buildCommand` must be null or a non-empty string";
+  assert lib.assertMsg (aapt2 == null || builtins.isPath aapt2 || builtins.isString aapt2)
+  "harbor-android: mkAndroidApkDevBuilder `aapt2` must be null, a path, or a string"; let
     shellCase = lib.concatStringsSep "\n" (
       lib.mapAttrsToList (
         name: cfg: let
@@ -118,6 +121,15 @@ in
         echo "error: ANDROID_SDK_ROOT is unset. Run inside the Android dev shell." >&2
         exit 1
       fi
+      export ANDROID_USER_HOME="''${ANDROID_USER_HOME:-$HOME/.android}"
+      mkdir -p "$ANDROID_USER_HOME"
+      ${lib.optionalString (aapt2 != null) ''
+        if [ ! -x ${lib.escapeShellArg (toString aapt2)} ]; then
+          echo "error: aapt2 is not executable: ${toString aapt2}" >&2
+          exit 1
+        fi
+        export GRADLE_OPTS="''${GRADLE_OPTS:-} -Dorg.gradle.project.android.aapt2FromMavenOverride=${toString aapt2}"
+      ''}
       for tool in cargo cargo-ndk gradle; do
         if ! command -v "$tool" >/dev/null; then
           echo "error: $tool not on PATH. Run inside the Android dev shell." >&2
