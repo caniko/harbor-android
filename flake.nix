@@ -5,10 +5,12 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
 
-    meta-harbor = {
-      url = "git+https://github.com/caniko/meta-harbor.git?ref=trunk";
+    harbor-meta = {
+      url = "git+https://github.com/caniko/harbor-meta.git?ref=trunk";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    meta-harbor.follows = "harbor-meta";
 
     treefmt-nix = {
       url = "github:numtide/treefmt-nix";
@@ -24,7 +26,7 @@
     flake-parts,
     self,
     nixpkgs,
-    meta-harbor,
+    harbor-meta,
     ...
   }:
     flake-parts.lib.mkFlake {inherit inputs;} {
@@ -37,7 +39,7 @@
 
       flake = {
         lib = import ./lib {
-          meta-harbor = meta-harbor.lib;
+          harbor-meta = harbor-meta.lib;
         };
 
         templates.default = {

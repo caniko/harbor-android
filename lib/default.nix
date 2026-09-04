@@ -1,8 +1,8 @@
-{meta-harbor}: let
+{harbor-meta}: let
   packageTests =
-    if meta-harbor != null
-    then meta-harbor.packageTests
-    else throw "harbor-android: package-test helpers require the meta-harbor flake input";
+    if harbor-meta != null
+    then harbor-meta.packageTests
+    else throw "harbor-android: package-test helpers require the harbor-meta flake input";
 in {
   inherit packageTests;
   mkAndroidSdk = import ./android-sdk.nix;
