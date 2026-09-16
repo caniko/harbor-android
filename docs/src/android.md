@@ -56,6 +56,21 @@ tar --sort=name --mtime='2026-01-01 00:00:00 UTC' \
 `findLocalMavenCache` returns `null` when either the hash file or tarball is
 absent. An empty or invalid committed hash fails evaluation.
 
+## Physical test devices
+
+`mkAndroidDeviceTools` packages `android-device`, a small enroll/verify
+helper for dev-shell and device-smoke loops. Definitions are local runtime
+JSON (`{schemaVersion, adbSerial, product, model}`), never flake inputs, so
+no serial enters the Nix store. Enrollment requires one uniquely connected,
+authorized USB device and refuses to overwrite; verification rechecks the
+serial, USB transport, and product on every run and prints the serial for
+capture. Which user/profile a caller may touch stays with the caller.
+
+```sh
+android-device enroll --serial "$SERIAL" --product mustang --out .android-device.local.json
+serial="$(android-device verify --definition .android-device.local.json)"
+```
+
 ## Package identity
 
 `mkAndroidApk` can emit package-identity sidecars when the caller supplies

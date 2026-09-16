@@ -11,4 +11,5 @@ in {
   mkAndroidApk = import ./android-apk.nix {inherit packageTests;};
   mkAndroidApkDevBuilder = import ./android-apk-dev-builder.nix {inherit packageTests;};
   mkAndroidFlavorTable = import ./android-flavor-table.nix {inherit packageTests;};
+  mkAndroidDeviceTools = import ./android-device.nix;
 }
