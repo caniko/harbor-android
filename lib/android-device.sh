@@ -16,6 +16,17 @@
 # decision, never part of the definition.
 set -euo pipefail
 adb="${ADB:-adb}"
+# Per-command ceiling so a wedged transport fails closed instead of hanging
+# the caller. Overridable for slow hosts; 0 disables when `timeout` exists.
+adb_timeout="${ANDROID_DEVICE_TIMEOUT:-90}"
+
+adb_run() {
+  if [[ "$adb_timeout" != "0" ]] && command -v timeout >/dev/null 2>&1; then
+    timeout "$adb_timeout" "$adb" "$@"
+  else
+    "$adb" "$@"
+  fi
+}
 
 usage() {
   echo "usage: android-device enroll --serial SERIAL --out FILE [--product PRODUCT] [--adb ADB]" >&2
@@ -23,18 +34,25 @@ usage() {
   exit 2
 }
 
-device_line() { # serial -> prints the `adb devices -l` line or fails
-  local serial="$1" line count
-  line="$("$adb" devices -l | awk -v s="$serial" 'NR>1 && $1==s {print}')"
-  count="$(printf '%s\n' "$line" | grep -c . || true)"
+device_state() { # serial -> prints the exact transport state field or fails
+  local serial="$1" states count
+  states="$(adb_run devices -l | awk -v s="$serial" 'NR>1 && $1==s {print $2}')"
+  count="$(printf '%s\n' "$states" | grep -c . || true)"
   [[ "$count" == "1" ]] || { echo "android-device: refusing: serial $serial is not uniquely connected" >&2; return 1; }
-  [[ "$line" == *" device "* || "$line" == *" device" ]] || { echo "android-device: refusing: serial $serial is not authorized/online" >&2; return 1; }
+  printf '%s\n' "$states"
+}
+
+device_line() { # serial -> prints the `adb devices -l` line or fails
+  local serial="$1" state line
+  state="$(device_state "$serial")" || return 1
+  [[ "$state" == "device" ]] || { echo "android-device: refusing: serial $serial is not authorized/online (state: $state)" >&2; return 1; }
+  line="$(adb_run devices -l | awk -v s="$serial" 'NR>1 && $1==s {print}')"
   [[ "$line" == *"usb:"* ]] || { echo "android-device: refusing: serial $serial is not a USB device" >&2; return 1; }
   printf '%s\n' "$line"
 }
 
 getprop() { # serial key -> value without carriage returns
-  "$adb" -s "$1" shell getprop "$2" | tr -d '\r'
+  adb_run -s "$1" shell getprop "$2" | tr -d '\r'
 }
 
 cmd_enroll() {
@@ -61,11 +79,23 @@ cmd_enroll() {
   fi
   model="$(getprop "$serial" ro.product.model)"
   umask 077
+  local tmp
+  tmp="$(mktemp "${out}.tmp.XXXXXX")"
+  trap 'rm -f "$tmp"' RETURN
   printf '{"schemaVersion":1,"adbSerial":%s,"product":%s,"model":%s}\n' \
     "$(jq -Rn --arg v "$serial" '$v')" \
     "$(jq -Rn --arg v "$observed_product" '$v')" \
-    "$(jq -Rn --arg v "$model" '$v')" >"$out"
-  chmod 0600 "$out"
+    "$(jq -Rn --arg v "$model" '$v')" >"$tmp"
+  chmod 0600 "$tmp"
+  # Atomic no-overwrite publish: the pre-check above is advisory only.
+  if ! (set -o noclobber; cat "$tmp" >"$out") 2>/dev/null; then
+    if [[ -e "$out" ]]; then
+      echo "android-device: refusing: $out exists (remove it explicitly to re-enroll)" >&2
+    else
+      echo "android-device: refusing: cannot write $out" >&2
+    fi
+    return 1
+  fi
   echo "android-device: enrolled $observed_product (${model:-unknown model}) as $serial" >&2
 }
 
@@ -79,14 +109,14 @@ cmd_verify() {
     esac
   done
   [[ -n "$def" && -f "$def" ]] || { echo "android-device: refusing: definition not found: ${def:-}" >&2; exit 1; }
-  local schema serial product
-  schema="$(jq -r '.schemaVersion' "$def" 2>/dev/null)" \
-    || { echo "android-device: refusing: $def is not valid JSON" >&2; exit 1; }
-  [[ "$schema" == "1" ]] || { echo "android-device: refusing: unsupported schemaVersion $schema" >&2; exit 1; }
+  jq -e '.schemaVersion == 1
+    and (.adbSerial | type) == "string" and (.adbSerial | length) > 0
+    and (.product | type) == "string" and (.product | length) > 0
+    and (.model == null or ((.model | type) == "string"))' "$def" >/dev/null 2>&1 \
+    || { echo "android-device: refusing: $def is not a valid device definition" >&2; exit 1; }
+  local serial product
   serial="$(jq -r '.adbSerial' "$def")"
   product="$(jq -r '.product' "$def")"
-  [[ -n "$serial" && "$serial" != "null" ]] || { echo "android-device: refusing: empty adbSerial" >&2; exit 1; }
-  [[ -n "$product" && "$product" != "null" ]] || { echo "android-device: refusing: empty product" >&2; exit 1; }
   device_line "$serial" >/dev/null
   local observed
   observed="$(getprop "$serial" ro.product.device)"

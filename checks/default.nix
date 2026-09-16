@@ -613,10 +613,20 @@ in
         if $dev verify --definition bad.json --adb adb 2>err; then exit 1; fi
         grep -q 'does not match' err
 
+        # Non-string definition fields fail closed.
+        jq '.adbSerial = 10' def.json > num.json
+        if $dev verify --definition num.json --adb adb 2>err; then exit 1; fi
+        grep -q 'not a valid device definition' err
+
         # Offline serial fails closed.
         export FAKE_DEVICES="S1 offline usb:9-3 product:mustang model:Pixel_10_Pro_XL device:mustang transport_id:1"
         if $dev verify --definition def.json --adb adb 2>err; then exit 1; fi
         grep -q 'not authorized/online' err
+
+        # Unauthorized serial fails closed with its exact state.
+        export FAKE_DEVICES="S1 unauthorized usb:9-3 product:mustang model:Pixel_10_Pro_XL device:mustang transport_id:1"
+        if $dev verify --definition def.json --adb adb 2>err; then exit 1; fi
+        grep -q 'unauthorized' err
 
         # Non-USB transport fails closed.
         export FAKE_DEVICES="S1 device product:mustang model:Pixel_10_Pro_XL device:mustang transport_id:1"
