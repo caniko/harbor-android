@@ -4,11 +4,13 @@
   inputs = {
     harbor-android.url = "github:caniko/harbor-android/trunk";
     nixpkgs.follows = "harbor-android/nixpkgs";
+    treefmt-nix.follows = "harbor-android/treefmt-nix";
   };
 
   outputs = {
     nixpkgs,
     harbor-android,
+    treefmt-nix,
     ...
   }: let
     systems = [
@@ -31,6 +33,17 @@
       };
     };
   in {
+    formatter = nixpkgs.lib.genAttrs systems (system:
+      (treefmt-nix.lib.evalModule nixpkgs.legacyPackages.${system} {
+        imports = [
+          harbor-android.inputs.harbor-meta.treefmtModules.nix
+          harbor-android.inputs.harbor-meta.treefmtModules.toml
+          harbor-android.treefmtModules.java
+          harbor-android.treefmtModules.kotlin
+        ];
+        projectRootFile = "flake.nix";
+      }).config.build.wrapper);
+
     devShells = nixpkgs.lib.genAttrs systems (system: {
       android = (forSystem system).android;
     });

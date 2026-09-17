@@ -10,7 +10,6 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    meta-harbor.follows = "harbor-meta";
 
     treefmt-nix = {
       url = "github:numtide/treefmt-nix";
@@ -38,6 +37,10 @@
       ];
 
       flake = {
+        treefmtModules = {
+          java = ./nix/treefmt/java.nix;
+          kotlin = ./nix/treefmt/kotlin.nix;
+        };
         lib = import ./lib {
           harbor-meta = harbor-meta.lib;
         };
@@ -48,13 +51,18 @@
         };
       };
 
-      perSystem = {pkgs, ...}: {
+      perSystem = {pkgs, ...}: let
+        treefmt = inputs.treefmt-nix.lib.evalModule pkgs {
+          imports = [harbor-meta.treefmtModules.nix harbor-meta.treefmtModules.toml self.treefmtModules.java self.treefmtModules.kotlin];
+          projectRootFile = "flake.nix";
+        };
+      in {
         checks = import ./checks {
           inherit pkgs self;
           lib = self.lib;
         };
 
-        formatter = pkgs.alejandra;
+        formatter = treefmt.config.build.wrapper;
       };
     };
 }
