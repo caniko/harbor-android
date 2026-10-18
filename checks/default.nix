@@ -57,7 +57,14 @@ in
       assert pkgs.lib.hasInfix "ANDROID_SDK_ROOT" shell.shellHook;
       assert pkgs.lib.hasInfix "29.0.14206865" shell.shellHook;
       assert pkgs.lib.hasInfix "libexec/android-sdk" shell.shellHook;
-        pkgs.runCommand "check-mkAndroidDevShell-exports" {} "touch $out";
+        pkgs.runCommand "check-mkAndroidDevShell-exports" {} ''
+          export ANDROID_HOME=/inherited/host-sdk
+          export ANDROID_SDK_ROOT=/inherited/legacy-sdk
+          ${shell.shellHook}
+          test "$ANDROID_HOME" = "${fakeSdk}/libexec/android-sdk"
+          test "$ANDROID_SDK_ROOT" = "$ANDROID_HOME"
+          touch "$out"
+        '';
 
     findLocalMavenCache-missing-inputs = let
       missingHash = lib.findLocalMavenCache {
