@@ -60,20 +60,19 @@
           if system == "x86_64-darwin"
           then inputs.nixpkgs-darwin
           else inputs.nixpkgs;
-        treefmt = inputs.treefmt-nix.lib.evalModule pkgs {
-          imports = [harbor-meta.treefmtModules.nix harbor-meta.treefmtModules.toml self.treefmtModules.java self.treefmtModules.kotlin];
-          projectRootFile = "flake.nix";
-        };
+        treefmt = inputs.treefmt-nix.lib.evalModule pkgs (import ./nix/treefmt.nix {inherit harbor-meta;});
       in {
         _module.args.pkgs = platformNixpkgs.legacyPackages.${system};
-        checks = import ./checks/platform-policy.nix {
-          inherit pkgs;
-          lib = self.lib;
-          tests = import ./checks {
-            inherit pkgs self;
+        checks =
+          import ./checks/platform-policy.nix {
+            inherit pkgs;
             lib = self.lib;
-          };
-        };
+            tests = import ./checks {
+              inherit pkgs self;
+              lib = self.lib;
+            };
+          }
+          // {formatting = treefmt.config.build.check self;};
 
         formatter = treefmt.config.build.wrapper;
       };
